@@ -11,9 +11,9 @@ import (
 
 type User struct {
 	UserID          string         `gorm:"primaryKey;column:user_id;size:36"`
-	FirebaseUID     string         `gorm:"column:firebase_uid;size:128;uniqueIndex"`
 	UserName        string         `gorm:"column:username;size:191"`
 	Email           string         `gorm:"column:email;size:191;uniqueIndex"`
+	PasswordHash    string         `gorm:"column:password_hash;size:255" json:"-"` // bcrypt hash, never exposed
 	PhoneNumber     string         `gorm:"column:phone_number;size:32"`
 	TradingPinHash  string         `gorm:"column:trading_pin_hash;size:255"`
 	IsEmailVerified bool           `gorm:"column:is_email_verified;default:false"`
@@ -111,6 +111,7 @@ var (
 	// User
 	ErrUserNotFound       = errors.New("user not found")
 	ErrEmailAlreadyExists = errors.New("email already exists")
+	ErrInvalidCredentials = errors.New("invalid email or password")
 
 	// Token
 	ErrTokenInvalid = errors.New("token is invalid")

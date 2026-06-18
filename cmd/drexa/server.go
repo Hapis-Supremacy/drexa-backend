@@ -13,7 +13,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
-	"drexa/internal/auth"
 	authRepo "drexa/internal/auth/repository"
 	authSvc "drexa/internal/auth/service"
 	authUc "drexa/internal/auth/usecase"
@@ -42,6 +41,8 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 	txRepository := walletRepo.NewTransactionRepository(db)
 	depositRepository := walletRepo.NewDepositRepository(db)
 	withdrawalRepository := walletRepo.NewWithdrawalRepository(db)
+	cryptoAddressRepository := walletRepo.NewCryptoAddressRepository(db)
+	walletTxManager := walletRepo.NewTxManager(db)
 
 	// ── Third-party senders ──────────────────────────────────────────────────
 	sgEmailSender := authSvc.NewSendGridEmailSender(cfg.SendGrid.APIKey, cfg.SendGrid.FromEmail, cfg.SendGrid.FromName)
@@ -50,6 +51,7 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 	// ── Auth Services ────────────────────────────────────────────────────────
 	otpService := authSvc.NewRedisOTPService(rdb, sgEmailSender, twilioSMSSender)
 	notifService := authSvc.NewSendGridNotificationService(sgEmailSender, cfg.SendGrid.AppURL)
+	rateLimiter := authSvc.NewRedisRateLimiter(rdb)
 	tokenService := authSvc.NewTokenService(
 		[]byte(cfg.JWT.Secret),
 		"drexa.api",
@@ -61,14 +63,8 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 	// TODO: replace NullPaymentService with StripePaymentService in production
 	paymentService := walletSvc.NewNullPaymentService()
 
-	// ── Firebase verifier ────────────────────────────────────────────────────
-	var fbVerifier auth.FirebaseVerifier = authSvc.NewNullFirebaseVerifier()
-	if fb != nil {
-		fbVerifier = authSvc.NewFirebaseAuthService(fb.Auth)
-		log.Println("firebase: auth client initialized")
-	} else {
-		log.Println("firebase: credentials not set — running with null verifier (dev only, all ID tokens accepted)")
-	}
+	// ── Crypto provider (Tatum) ──────────────────────────────────────────────
+	tatumService := walletSvc.NewTatumService(cfg.Tatum.APIKey, cfg.Tatum.BaseURL)
 
 	// ── Auth Usecases ────────────────────────────────────────────────────────
 	authUsecase := authUc.NewAuthUsecase(userRepo, refreshTokenRepo, otpService, tokenService)
@@ -82,13 +78,16 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 		depositRepository,
 		withdrawalRepository,
 		paymentService,
+		walletTxManager,
 	)
 	adminWalletUsecase := walletUc.NewAdminWalletUsecase(
 		walletRepository,
 		txRepository,
 		withdrawalRepository,
 		paymentService,
+		walletTxManager,
 	)
+	cryptoWalletUsecase := walletUc.NewCryptoWalletUsecase(cryptoAddressRepository, tatumService, cfg.Tatum.Testnet)
 
 	// ── Market Service ───────────────────────────────────────────────────────
 	marketHub := market.NewHub()
@@ -97,17 +96,46 @@ func NewServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client, fb *firebaseI
 	binanceClient := market.NewBinanceWSClient(marketHub)
 	go binanceClient.Run()
 
-	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, fbVerifier, walletUsecase, adminWalletUsecase, marketHub, cfg.App.Env == "production")
+	addRoutes(mux, authUsecase, kycUsecase, adminKycUsecase, tokenService, rateLimiter, walletUsecase, cryptoWalletUsecase, adminWalletUsecase, marketHub, cfg.App.Env == "production")
 
 	return &Server{
 		httpServer: &http.Server{
 			Addr:         cfg.App.Port,
-			Handler:      mux,
+			Handler:      corsMiddleware(cfg.App.AllowedOrigins, mux),
 			ReadTimeout:  cfg.App.ReadTimeout,
 			WriteTimeout: cfg.App.WriteTimeout,
 			IdleTimeout:  cfg.App.IdleTimeout,
 		},
 	}
+}
+
+// corsMiddleware reflects allowed origins and enables credentialed cross-origin
+// requests so the browser sends and stores the gateway's session cookies.
+// It answers CORS preflight (OPTIONS) requests directly.
+func corsMiddleware(allowedOrigins []string, next http.Handler) http.Handler {
+	allowed := make(map[string]bool, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		allowed[o] = true
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
+		}
+
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Max-Age", "300")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Start(ctx context.Context, w io.Writer, _ []string) error {

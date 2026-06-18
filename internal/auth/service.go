@@ -45,6 +45,14 @@ type TokenService interface {
 	HashToken(token string) string
 }
 
+// RateLimiter throttles repeated actions keyed by an identifier (e.g. client IP).
+// Backed by Redis so the limit is shared across all server instances.
+type RateLimiter interface {
+	// Allow increments the counter for key and reports whether the action is
+	// still permitted within the given window. Returns false once limit is exceeded.
+	Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
+}
+
 // FirebaseVerifier verifies Firebase ID tokens issued by the frontend Firebase SDK.
 // Implement via FirebaseAuthService in internal/auth/service once Firebase is configured.
 type FirebaseVerifier interface {

@@ -64,20 +64,6 @@ func (r *userRepository) FindByID(ctx context.Context, userID string) (*auth.Use
 	return &user, nil
 }
 
-func (r *userRepository) FindByFirebaseUID(ctx context.Context, firebaseUID string) (*auth.User, error) {
-	var user auth.User
-	result := r.db.WithContext(ctx).
-		Where("firebase_uid = ?", firebaseUID).
-		First(&user)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return nil, auth.ErrUserNotFound
-		}
-		return nil, result.Error
-	}
-	return &user, nil
-}
-
 func (r *userRepository) FindByEmail(ctx context.Context, email string) (*auth.User, error) {
 	var user auth.User
 	result := r.db.WithContext(ctx).

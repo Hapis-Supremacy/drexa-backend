@@ -11,7 +11,6 @@ type UserRepository interface {
 
 	// Read
 	FindByID(ctx context.Context, userID string) (*User, error)
-	FindByFirebaseUID(ctx context.Context, firebaseUID string) (*User, error)
 	FindByEmail(ctx context.Context, email string) (*User, error)
 
 	// Targeted updates — use column-specific updates to avoid GORM zero-value pitfalls

@@ -2,14 +2,22 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 )
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
-type FirebaseSignInRequest struct {
-	IDToken string `json:"id_token"`
+type RegisterRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type VerifyRequest struct {
@@ -57,31 +65,52 @@ func setAuthCookies(w http.ResponseWriter, access, refresh string, secure bool) 
 
 // ─── Public Auth Handlers ─────────────────────────────────────────────────────
 
-// HandleFirebaseSignIn is the single sign-in endpoint.
-// It accepts a Firebase ID token, verifies it, and issues backend JWT cookies.
-// On first call for a given UID the user record is created automatically.
-func HandleFirebaseSignIn(u AuthUsecase, fb FirebaseVerifier, secureCookies bool) http.HandlerFunc {
+// HandleRegister creates a new account with email + password and issues JWT cookies.
+func HandleRegister(u AuthUsecase, secureCookies bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req FirebaseSignInRequest
+		var req RegisterRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "invalid input"})
 			return
 		}
 
-		claims, err := fb.VerifyIDToken(r.Context(), req.IDToken)
+		token, err := u.Register(r.Context(), req.Email, req.Password, req.Username)
 		if err != nil {
-			sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "invalid firebase token"})
-			return
-		}
-
-		token, err := u.SignInWithFirebase(r.Context(), claims)
-		if err != nil {
-			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "sign-in failed"})
+			switch {
+			case errors.Is(err, ErrEmailAlreadyExists):
+				sendJSON(w, http.StatusConflict, MessageResponse{Error: "email already registered"})
+			default:
+				sendJSON(w, http.StatusBadRequest, MessageResponse{Error: err.Error()})
+			}
 			return
 		}
 
 		setAuthCookies(w, token.AccessToken, token.RefreshToken, secureCookies)
-		sendJSON(w, http.StatusOK, MessageResponse{Message: "sign-in successful"})
+		sendJSON(w, http.StatusCreated, MessageResponse{Message: "registration successful"})
+	}
+}
+
+// HandleLogin verifies email + password and issues JWT cookies.
+func HandleLogin(u AuthUsecase, secureCookies bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req LoginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			sendJSON(w, http.StatusBadRequest, MessageResponse{Error: "invalid input"})
+			return
+		}
+
+		token, err := u.Login(r.Context(), req.Email, req.Password)
+		if err != nil {
+			if errors.Is(err, ErrInvalidCredentials) {
+				sendJSON(w, http.StatusUnauthorized, MessageResponse{Error: "invalid email or password"})
+				return
+			}
+			sendJSON(w, http.StatusInternalServerError, MessageResponse{Error: "login failed"})
+			return
+		}
+
+		setAuthCookies(w, token.AccessToken, token.RefreshToken, secureCookies)
+		sendJSON(w, http.StatusOK, MessageResponse{Message: "login successful"})
 	}
 }
 

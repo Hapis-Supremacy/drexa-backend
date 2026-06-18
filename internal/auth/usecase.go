@@ -4,10 +4,13 @@ import "context"
 
 // AuthUsecase handles user-facing authentication flows
 type AuthUsecase interface {
-	// Sign in — creates user on first call, finds existing user on subsequent calls
-	SignInWithFirebase(ctx context.Context, claims *FirebaseClaims) (*AuthToken, error)
+	// Register creates a new user with email + password, then issues a token pair
+	Register(ctx context.Context, email, password, username string) (*AuthToken, error)
 
-	// Phone verification — Firebase handles email; backend handles phone for trading compliance
+	// Login verifies email + password and issues a token pair
+	Login(ctx context.Context, email, password string) (*AuthToken, error)
+
+	// Phone verification — backend handles phone OTP for trading compliance
 	SendPhoneVerificationOTP(ctx context.Context, userID string) error
 	VerifyPhone(ctx context.Context, userID, otp string) (bool, error)
 

@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -17,6 +18,13 @@ type Config struct {
 	Firebase FirebaseConfig
 	Twilio   TwilioConfig
 	SendGrid SendGridConfig
+	Tatum    TatumConfig
+}
+
+type TatumConfig struct {
+	APIKey  string // active key, chosen from TATUM_ENV
+	BaseURL string
+	Testnet bool
 }
 
 type TwilioConfig struct {
@@ -33,11 +41,12 @@ type SendGridConfig struct {
 }
 
 type AppConfig struct {
-	Port         string
-	Env          string // "development" | "production"
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
+	Port           string
+	Env            string // "development" | "production"
+	AllowedOrigins []string
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	IdleTimeout    time.Duration
 }
 
 type DBConfig struct {
@@ -69,13 +78,21 @@ func Load() *Config {
 		log.Println("no .env file found, reading from environment")
 	}
 
+	// Tatum: pick the testnet or mainnet key based on TATUM_ENV.
+	tatumEnv := getEnv("TATUM_ENV", "testnet")
+	tatumKey := getEnv("TATUM_TESTNET_API_KEY", "")
+	if tatumEnv == "mainnet" {
+		tatumKey = getEnv("TATUM_WALLET_API_KEY", "")
+	}
+
 	return &Config{
 		App: AppConfig{
-			Port:         getEnv("APP_PORT", ":8080"),
-			Env:          getEnv("APP_ENV", "development"),
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 10 * time.Second,
-			IdleTimeout:  120 * time.Second,
+			Port:           getEnv("APP_PORT", ":8080"),
+			Env:            getEnv("APP_ENV", "development"),
+			AllowedOrigins: getEnvCSV("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
+			ReadTimeout:    5 * time.Second,
+			WriteTimeout:   10 * time.Second,
+			IdleTimeout:    120 * time.Second,
 		},
 		DB: DBConfig{
 			DSN:             mustGetEnv("DB_DSN"),
@@ -108,6 +125,11 @@ func Load() *Config {
 			FromName:  getEnv("SENDGRID_FROM_NAME", "Drexa"),
 			AppURL:    getEnv("APP_URL", "http://localhost:3000"),
 		},
+		Tatum: TatumConfig{
+			APIKey:  tatumKey,
+			BaseURL: getEnv("TATUM_BASE_URL", "https://api.tatum.io"),
+			Testnet: tatumEnv != "mainnet",
+		},
 	}
 }
 
@@ -126,6 +148,22 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// optional — splits a comma-separated env var into a trimmed slice
+func getEnvCSV(key, fallback string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		v = fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func getEnvInt(key string, fallback int) int {
